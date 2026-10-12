@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Format check
+        run: dotnet format --verify-no-changes --no-restore
+
+      - name: Build (warnings as errors)
+        run: dotnet build --no-restore -c Release
+
+      - name: Test with coverage
+        run: dotnet test --no-build -c Release --collect:"XPlat Code Coverage" --results-directory ./coverage
+
+      - name: Vulnerable dependency scan
+        run: |
+          dotnet list package --vulnerable --include-transitive | tee vuln.txt
+          ! grep -q -i "has the following vulnerable packages" vuln.txt
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/**/coverage.cobertura.xml
