@@ -8,10 +8,10 @@ with the engineer owning every decision.
 | | |
 |---|---|
 | Runtime | .NET 10 (`net10.0`), C# latest |
-| API | ASP.NET Core minimal APIs, OpenAPI 3 document, RFC 9457 Problem Details |
+| API | ASP.NET Core minimal APIs, OpenAPI 3 document + Swagger UI, RFC 9457 Problem Details |
 | Storage | SQLite via EF Core 10 (default) or in-memory (dev/tests) |
 | Reliability | Per-client rate limiting, health check, bounded async analytics queue, redirect cache, graceful shutdown drain |
-| Tests | 112 tests: 84 unit (xUnit) + 28 integration (`WebApplicationFactory` + real SQLite) |
+| Tests | 113 tests: 84 unit (xUnit) + 29 integration (`WebApplicationFactory` + real SQLite) |
 
 ---
 
@@ -47,7 +47,7 @@ with the engineer owning every decision.
   service's own host is blocked to prevent redirect loops.
 - **Reliability** – rate limiting (separate budgets for create vs. redirect), `/health`, bounded click queue that
   never blocks redirects, per-instance redirect cache, batch persistence, drain on shutdown.
-- **Operability** – OpenAPI document at `/openapi/v1.json`, structured logging via source-generated `LoggerMessage`,
+- **Operability** – OpenAPI document at `/openapi/v1.json`, interactive Swagger UI at `/swagger`, structured logging via source-generated `LoggerMessage`,
   consistent Problem Details errors with a machine-readable `errorCode`.
 
 ---
@@ -106,6 +106,9 @@ curl http://localhost:5213/health
 curl http://localhost:5213/openapi/v1.json
 ```
 
+Open **http://localhost:5213/swagger** (or http://localhost:8080/swagger in Docker) to explore and call the API
+interactively with Swagger UI.
+
 ### Run the tests
 
 ```bash
@@ -141,6 +144,7 @@ All errors use `application/problem+json` and include an `errorCode` extension, 
 | `GET` | `/{code}` | Redirect to the original URL | `302` | `404`, `410`, `429` |
 | `GET` | `/health` | Storage health check | `200` / `503` | |
 | `GET` | `/openapi/v1.json` | OpenAPI 3 document | `200` | |
+| `GET` | `/swagger` | Swagger UI (interactive docs, backed by `/openapi/v1.json`) | `200` | |
 
 ### Create request
 
@@ -360,7 +364,7 @@ translated to SQL (SQLite has no native `DateTimeOffset`).
 | Domain service | `UnitTests/Services` | Create (generated, alias, dedupe rules, collision retry, attempt exhaustion, reserved-word skip, expiry rules, UTC normalization), resolve (tracking, expiry with `FakeTimeProvider`, deactivation with cache eviction, cache hits, drop tolerance), stats (zero-filled windows, referrer ranking), paging validation |
 | Infrastructure | `UnitTests/Infrastructure` | In-memory repositories incl. concurrency (single winner on duplicate code, no lost counter updates), channel tracker overflow, background processor batching, **drain on shutdown**, recovery after persistence failure |
 | Persistence | `IntegrationTests/Persistence` | EF Core against real SQLite: unique index under a race, timestamp round-trip, dedupe query semantics, deactivate/list ordering, batch insert + counter increment in a transaction |
-| HTTP | `IntegrationTests/Api` | Full pipeline via `WebApplicationFactory`: status codes, Location header, Problem Details + `errorCode`, malformed JSON, redirects and cache headers, `410` after delete, async stats (polled), paging, health, OpenAPI document, security headers, rate limiting (`429` + `Retry-After`), SQLite end-to-end lifecycle |
+| HTTP | `IntegrationTests/Api` | Full pipeline via `WebApplicationFactory`: status codes, Location header, Problem Details + `errorCode`, malformed JSON, redirects and cache headers, `410` after delete, async stats (polled), paging, health, OpenAPI document, Swagger UI, security headers, rate limiting (`429` + `Retry-After`), SQLite end-to-end lifecycle |
 
 Principles: deterministic time via `TimeProvider`/`FakeTimeProvider`; hand-written fakes instead of mocking libraries;
 no sleeps for correctness – eventual consistency is asserted by polling with a timeout; every test class gets an
@@ -437,7 +441,7 @@ The prototype demonstrates *engineer-led execution accelerated by AI*. Summary:
 3. **AI-assisted execution** – an AI agent (Devin) generated code, tests and docs within each task; every output
    went through the quality gates, and options rejected along the way are logged with rationale.
 4. **Traceability** – generated/edited/rejected items with rationale are logged.
-5. **Validation** – compiler/analyzers, formatting, 112 automated tests, vulnerable-package scan, manual
+5. **Validation** – compiler/analyzers, formatting, 113 automated tests, vulnerable-package scan, manual
    end-to-end smoke test against SQLite, Docker build.
 6. **Human sign-off** – high-impact changes (data model, security controls, public API contract) require explicit
    engineer approval via the review checklist.
@@ -453,7 +457,7 @@ The greenfield, brownfield and ambiguous scenarios (decomposition, execution, va
 
 - **Plan & rationale** – layered architecture keeps rules testable and infrastructure replaceable; the redirect hot
   path is optimized (format check → cache → non-blocking analytics) because it dominates traffic.
-- **Artifacts** – runnable API, OpenAPI document, SQLite schema, 112 tests, Dockerfile, CI workflow, this README,
+- **Artifacts** – runnable API, OpenAPI document + Swagger UI, SQLite schema, 113 tests, Dockerfile, CI workflow, this README,
   scenario and AI-traceability documents.
 - **Risks/trade-offs/validation** – see [Risks](#risks-trade-offs-and-failure-scenarios) and
   [Quality gates](#quality-gates); the main deliberate trade-off is best-effort analytics in exchange for redirect

@@ -22,6 +22,11 @@ app.Use(async (context, next) =>
     context.Response.Headers.XFrameOptions = "DENY";
     await next(context);
 });
+app.UseSwaggerUI(options =>
+{
+    options.SwaggerEndpoint("/openapi/v1.json", "URL Shortener API v1");
+    options.DocumentTitle = "URL Shortener API";
+});
 app.UseRateLimiter();
 
 app.MapOpenApi();

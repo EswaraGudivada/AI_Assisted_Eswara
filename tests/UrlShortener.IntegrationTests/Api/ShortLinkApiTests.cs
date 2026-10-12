@@ -187,6 +187,17 @@ public class ShortLinkApiTests(ApiFactory factory) : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Swagger_ui_is_served_and_points_at_the_openapi_document()
+    {
+        var page = await _client.GetAsync("/swagger/index.html");
+        Assert.Equal(HttpStatusCode.OK, page.StatusCode);
+        Assert.Contains("URL Shortener API", await page.Content.ReadAsStringAsync());
+
+        var config = await _client.GetStringAsync("/swagger/index.js");
+        Assert.Contains("/openapi/v1.json", config);
+    }
+
+    [Fact]
     public async Task Responses_include_security_headers()
     {
         var response = await _client.GetAsync("/health");
