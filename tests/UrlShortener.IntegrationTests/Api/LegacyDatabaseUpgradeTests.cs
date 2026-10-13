@@ -12,10 +12,12 @@ public sealed class LegacyDatabaseUpgradeTests : IDisposable
 {
     private readonly ApiFactory _factory = new();
 
-    [Fact]
-    public async Task Starts_on_a_database_created_without_migrations_and_keeps_its_data()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Starts_on_a_database_created_without_migrations_and_keeps_its_data(bool afterFailedMigrateAttempt)
     {
-        await CreateLegacyDatabaseAsync(_factory.DatabasePath);
+        await CreateLegacyDatabaseAsync(_factory.DatabasePath, afterFailedMigrateAttempt);
         var client = _factory.CreateClient();
 
         var lookup = await client.GetAsync("/legacy-1");
@@ -46,7 +48,7 @@ public sealed class LegacyDatabaseUpgradeTests : IDisposable
     }
 
     // Schema exactly as the previous version's EnsureCreated produced it (Referrer/UserAgent, no history table).
-    private static async Task CreateLegacyDatabaseAsync(string path)
+    private static async Task CreateLegacyDatabaseAsync(string path, bool withEmptyHistoryTable)
     {
         await using var connection = new SqliteConnection($"Data Source={path};Pooling=False");
         await connection.OpenAsync();
@@ -70,6 +72,15 @@ public sealed class LegacyDatabaseUpgradeTests : IDisposable
             INSERT INTO click_events (Code, OccurredAt, Referrer, UserAgent)
                 VALUES ('legacy-1', {clickedAt}, 'news.example', 'Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Chrome/126.0 Safari/537.36');
             """;
+        if (withEmptyHistoryTable)
+        {
+            // What a failed Migrate attempt by the first migrations-based build leaves behind.
+            command.CommandText += """
+                CREATE TABLE "__EFMigrationsHistory" ("MigrationId" TEXT NOT NULL CONSTRAINT "PK___EFMigrationsHistory" PRIMARY KEY, "ProductVersion" TEXT NOT NULL);
+                CREATE TABLE "__EFMigrationsLock" ("Id" INTEGER NOT NULL CONSTRAINT "PK___EFMigrationsLock" PRIMARY KEY, "Timestamp" TEXT NOT NULL);
+                """;
+        }
+
         await command.ExecuteNonQueryAsync();
     }
 }

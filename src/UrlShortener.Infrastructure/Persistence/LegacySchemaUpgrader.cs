@@ -16,8 +16,10 @@ internal static class LegacySchemaUpgrader
 {
     public static async Task UpgradeIfNeededAsync(UrlShortenerDbContext db, CancellationToken cancellationToken)
     {
+        // An empty history table is not proof of a migrated database: a failed earlier Migrate attempt leaves one behind.
         var history = db.GetService<IHistoryRepository>();
-        if (await history.ExistsAsync(cancellationToken) || !await TableExistsAsync(db, "short_links", cancellationToken))
+        if (!await TableExistsAsync(db, "short_links", cancellationToken)
+            || (await history.ExistsAsync(cancellationToken) && (await history.GetAppliedMigrationsAsync(cancellationToken)).Count > 0))
         {
             return;
         }

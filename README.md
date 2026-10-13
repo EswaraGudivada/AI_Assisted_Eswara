@@ -120,7 +120,7 @@ dotnet ef database update -p src/UrlShortener.Infrastructure -s src/UrlShortener
 dotnet test UrlShortener.slnx
 ```
 
-196 tests: 153 unit tests and 43 integration tests.
+197 tests: 153 unit tests and 44 integration tests.
 
 - **Unit tests** cover the service rules with hand-written fakes and a fake clock: code generation and collisions,
   aliases, URL checks, private-network and denied-host rules, expiry, deduplication, negative caching, statistics

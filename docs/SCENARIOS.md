@@ -71,7 +71,7 @@ Each task was given to the AI assistant with **intent, constraints and acceptanc
 
 ### Validation
 
-- 153 unit tests + 43 integration tests green; `dotnet format` clean; no vulnerable packages.
+- 153 unit tests + 44 integration tests green; `dotnet format` clean; no vulnerable packages.
 - Manual smoke test against SQLite: create → lookup (`200`) → stats → delete → `410`, `/health`, `/openapi/v1.json`.
 - Docker image built and exercised (`201`, `200`, `Healthy`).
 
