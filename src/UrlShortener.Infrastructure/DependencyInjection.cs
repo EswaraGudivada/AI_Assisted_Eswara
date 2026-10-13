@@ -76,7 +76,9 @@ public static class DependencyInjection
 
         if (configuration.GetValue("Database:AutoMigrate", defaultValue: true))
         {
-            await scope.ServiceProvider.GetRequiredService<UrlShortenerDbContext>().Database.MigrateAsync(cancellationToken);
+            var db = scope.ServiceProvider.GetRequiredService<UrlShortenerDbContext>();
+            await LegacySchemaUpgrader.UpgradeIfNeededAsync(db, cancellationToken);
+            await db.Database.MigrateAsync(cancellationToken);
         }
     }
 

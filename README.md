@@ -120,7 +120,7 @@ dotnet ef database update -p src/UrlShortener.Infrastructure -s src/UrlShortener
 dotnet test UrlShortener.slnx
 ```
 
-195 tests: 153 unit tests and 42 integration tests.
+196 tests: 153 unit tests and 43 integration tests.
 
 - **Unit tests** cover the service rules with hand-written fakes and a fake clock: code generation and collisions,
   aliases, URL checks, private-network and denied-host rules, expiry, deduplication, negative caching, statistics
@@ -258,7 +258,9 @@ SQLite through EF Core, with migrations in
 | `short_links` | `Id`, `Code`, `OriginalUrl`, `CreatedAt`, `ExpiresAt`, `IsActive`, `IsCustomAlias`, `ClickCount`, `LastAccessedAt` | unique `Code`; `OriginalUrl`; `CreatedAt` |
 | `click_events` | `Id`, `Code`, `OccurredAt`, `RefererHost`, `UserAgentFamily` | (`Code`, `OccurredAt`) |
 
-Timestamps are stored as sortable integers so SQLite can compare and order them. Deleting a link only sets
+Timestamps are stored as sortable integers so SQLite can compare and order them. A database created by an earlier version of this
+project (before migrations) is upgraded in place on start: the click columns are renamed, stored browser strings are
+reduced to a browser family, and the initial migration is recorded as applied. Deleting a link only sets
 `IsActive = false`; codes are never reused and history is kept.
 
 To change the schema: edit the model, then
