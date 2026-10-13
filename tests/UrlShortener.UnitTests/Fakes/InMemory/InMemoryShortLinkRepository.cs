@@ -2,7 +2,7 @@ using UrlShortener.Core.Abstractions;
 using UrlShortener.Core.Common;
 using UrlShortener.Core.Domain;
 
-namespace UrlShortener.Infrastructure.InMemory;
+namespace UrlShortener.UnitTests.Fakes.InMemory;
 
 internal sealed class InMemoryShortLinkRepository(InMemoryLinkStore store) : IShortLinkRepository
 {

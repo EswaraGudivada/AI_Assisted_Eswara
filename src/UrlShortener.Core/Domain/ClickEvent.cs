@@ -1,7 +1,8 @@
 namespace UrlShortener.Core.Domain;
 
 /// <summary>
-/// A single successful redirect. Only the referrer host and a truncated user agent are kept (no IP addresses).
+/// One successful lookup. Stores no IP address, no user id and no full browser string: only the referring
+/// site's host and a coarse browser family.
 /// </summary>
 public sealed record ClickEvent
 {
@@ -11,7 +12,7 @@ public sealed record ClickEvent
 
     public DateTimeOffset OccurredAt { get; init; }
 
-    public string? Referrer { get; init; }
+    public string? RefererHost { get; init; }
 
-    public string? UserAgent { get; init; }
+    public string? UserAgentFamily { get; init; }
 }

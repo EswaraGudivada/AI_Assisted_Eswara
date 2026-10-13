@@ -14,8 +14,8 @@ WORKDIR /app
 RUN mkdir -p /data && chown app:app /data
 COPY --from=build /app/publish .
 ENV ASPNETCORE_HTTP_PORTS=8080 \
-    Storage__Provider=Sqlite \
-    Storage__ConnectionString="Data Source=/data/urlshortener.db"
+    ConnectionStrings__Default="Data Source=/data/urlshortener.db" \
+    Shortener__BaseUrl="http://localhost:8080"
 VOLUME ["/data"]
 EXPOSE 8080
 USER app

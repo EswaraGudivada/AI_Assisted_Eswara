@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using UrlShortener.Core.Abstractions;
 using UrlShortener.Core.Domain;
 
-namespace UrlShortener.Infrastructure.InMemory;
+namespace UrlShortener.UnitTests.Fakes.InMemory;
 
 internal sealed class InMemoryClickEventRepository(InMemoryLinkStore store) : IClickEventRepository
 {
@@ -38,13 +38,14 @@ internal sealed class InMemoryClickEventRepository(InMemoryLinkStore store) : IC
         return Task.CompletedTask;
     }
 
-    public Task<IReadOnlyList<ClickEvent>> GetSinceAsync(
+    public Task<IReadOnlyList<ClickEvent>> GetRangeAsync(
         string code,
-        DateTimeOffset since,
+        DateTimeOffset from,
+        DateTimeOffset to,
         CancellationToken cancellationToken = default)
     {
         IReadOnlyList<ClickEvent> result = store.Clicks.TryGetValue(code, out var queue)
-            ? queue.Where(c => c.OccurredAt >= since).ToList()
+            ? queue.Where(c => c.OccurredAt >= from && c.OccurredAt <= to).ToList()
             : [];
         return Task.FromResult(result);
     }

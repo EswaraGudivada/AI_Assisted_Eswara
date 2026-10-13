@@ -5,91 +5,88 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using UrlShortener.Core;
 using UrlShortener.Core.Abstractions;
+using UrlShortener.Core.Safety;
 using UrlShortener.Core.Services;
 using UrlShortener.Infrastructure.Caching;
 using UrlShortener.Infrastructure.ClickTracking;
+using UrlShortener.Infrastructure.Diagnostics;
 using UrlShortener.Infrastructure.Health;
-using UrlShortener.Infrastructure.InMemory;
 using UrlShortener.Infrastructure.Persistence;
 
 namespace UrlShortener.Infrastructure;
 
 public static class DependencyInjection
 {
+    public const string ConnectionStringName = "Default";
+    private const string DefaultConnectionString = "Data Source=urlshortener.db";
+
     /// <summary>
-    /// Registers the core service and its infrastructure. Options are resolved lazily so configuration
-    /// overrides applied after registration (e.g. by test hosts) are honoured.
+    /// Registers the core service and its infrastructure. Options and the connection string are resolved when
+    /// first used, so overrides applied after registration (environment variables, test hosts) are honoured.
     /// </summary>
     public static IServiceCollection AddUrlShortener(this IServiceCollection services, IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
 
-        services.AddOptions<ShortenerOptions>()
-            .Bind(configuration.GetSection(ShortenerOptions.SectionName))
-            .Validate(o => o.CodeLength is >= 4 and <= 16, "Shortener:CodeLength must be between 4 and 16.")
-            .Validate(o => o.MaxGenerationAttempts >= 1, "Shortener:MaxGenerationAttempts must be at least 1.")
-            .Validate(o => o.MaxUrlLength is >= 32 and <= 2048, "Shortener:MaxUrlLength must be between 32 and 2048.")
-            .Validate(o => o.MaxStatsWindowDays is >= 1 and <= 366, "Shortener:MaxStatsWindowDays must be between 1 and 366.")
-            .Validate(
-                o => string.IsNullOrWhiteSpace(o.BaseUrl) || Uri.TryCreate(o.BaseUrl, UriKind.Absolute, out _),
-                "Shortener:BaseUrl must be an absolute URL.")
-            .ValidateOnStart();
-        services.AddOptions<StorageOptions>()
-            .Bind(configuration.GetSection(StorageOptions.SectionName))
-            .Validate(o => o.Provider != StorageProvider.Sqlite || !string.IsNullOrWhiteSpace(o.ConnectionString),
-                "Storage:ConnectionString is required for the Sqlite provider.")
-            .ValidateOnStart();
-        services.AddOptions<CachingOptions>()
-            .Bind(configuration.GetSection(CachingOptions.SectionName))
-            .Validate(o => o.TtlSeconds > 0 && o.MaxEntries > 0, "Caching:TtlSeconds and Caching:MaxEntries must be positive.")
-            .ValidateOnStart();
-        services.AddOptions<ClickTrackingOptions>()
-            .Bind(configuration.GetSection(ClickTrackingOptions.SectionName))
-            .Validate(o => o.QueueCapacity > 0 && o.BatchSize > 0, "ClickTracking:QueueCapacity and ClickTracking:BatchSize must be positive.")
-            .ValidateOnStart();
+        AddValidatedOptions<ShortenerOptions>(services, configuration, ShortenerOptions.SectionName);
+        AddValidatedOptions<SecurityOptions>(services, configuration, SecurityOptions.SectionName);
+        AddValidatedOptions<CacheOptions>(services, configuration, CacheOptions.SectionName);
+        AddValidatedOptions<AnalyticsOptions>(services, configuration, AnalyticsOptions.SectionName);
+        AddValidatedOptions<RateLimitOptions>(services, configuration, RateLimitOptions.SectionName);
 
         services.TryAddSingleton(TimeProvider.System);
-        services.AddSingleton(sp => sp.GetRequiredService<IOptions<ShortenerOptions>>().Value);
+        services.AddMetrics();
+        services.AddSingleton<ShortenerMetrics>();
+
+        services.AddSingleton<IUrlSafetyRule, PrivateNetworkRule>();
+        services.AddSingleton<IUrlSafetyRule, DeniedHostRule>();
+        services.AddSingleton<IUrlSafetyValidator, UrlSafetyValidator>();
         services.AddSingleton<IShortCodeGenerator, RandomShortCodeGenerator>();
         services.AddScoped<IShortLinkService, ShortLinkService>();
-
-        services.AddSingleton<IShortLinkCache>(sp =>
-            sp.GetRequiredService<IOptions<CachingOptions>>().Value.Enabled
-                ? ActivatorUtilities.CreateInstance<MemoryShortLinkCache>(sp)
-                : NullShortLinkCache.Instance);
+        services.AddSingleton<IShortLinkCache, MemoryShortLinkCache>();
 
         services.AddSingleton<ChannelClickTracker>();
         services.AddSingleton<IClickTracker>(sp => sp.GetRequiredService<ChannelClickTracker>());
         services.AddHostedService<ClickEventProcessor>();
 
-        services.AddSingleton<InMemoryLinkStore>();
         services.AddDbContext<UrlShortenerDbContext>((sp, db) =>
-            db.UseSqlite(sp.GetRequiredService<IOptions<StorageOptions>>().Value.ConnectionString));
-        services.AddScoped<IShortLinkRepository>(sp => UseSqlite(sp)
-            ? ActivatorUtilities.CreateInstance<EfShortLinkRepository>(sp)
-            : ActivatorUtilities.CreateInstance<InMemoryShortLinkRepository>(sp));
-        services.AddScoped<IClickEventRepository>(sp => UseSqlite(sp)
-            ? ActivatorUtilities.CreateInstance<EfClickEventRepository>(sp)
-            : ActivatorUtilities.CreateInstance<InMemoryClickEventRepository>(sp));
+            db.UseSqlite(sp.GetRequiredService<IConfiguration>().GetConnectionString(ConnectionStringName) ?? DefaultConnectionString));
+        services.AddScoped<IShortLinkRepository, EfShortLinkRepository>();
+        services.AddScoped<IClickEventRepository, EfClickEventRepository>();
 
-        services.AddHealthChecks().AddCheck<StorageHealthCheck>("storage");
+        services.AddHealthChecks()
+            .AddCheck<DatabaseHealthCheck>("database", tags: ["ready"])
+            .AddCheck<ClickQueueHealthCheck>("click-queue", tags: ["ready"]);
 
         return services;
     }
 
     /// <summary>
-    /// Creates the SQLite schema when it does not exist. A production deployment would apply EF Core migrations instead.
+    /// Validates every option section, then applies pending EF Core migrations unless <c>Database:AutoMigrate</c>
+    /// is false (e.g. when migrations are applied by a release pipeline instead).
     /// </summary>
-    public static async Task InitializeStorageAsync(this IServiceProvider services, CancellationToken cancellationToken = default)
+    public static async Task InitializeStorageAsync(
+        this IServiceProvider services,
+        IConfiguration configuration,
+        CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(configuration);
         await using var scope = services.CreateAsyncScope();
-        if (UseSqlite(scope.ServiceProvider))
+        _ = scope.ServiceProvider.GetRequiredService<ShortenerOptions>();
+
+        if (configuration.GetValue("Database:AutoMigrate", defaultValue: true))
         {
-            var db = scope.ServiceProvider.GetRequiredService<UrlShortenerDbContext>();
-            await db.Database.EnsureCreatedAsync(cancellationToken);
+            await scope.ServiceProvider.GetRequiredService<UrlShortenerDbContext>().Database.MigrateAsync(cancellationToken);
         }
     }
 
-    private static bool UseSqlite(IServiceProvider sp) =>
-        sp.GetRequiredService<IOptions<StorageOptions>>().Value.Provider == StorageProvider.Sqlite;
+    private static void AddValidatedOptions<T>(IServiceCollection services, IConfiguration configuration, string section)
+        where T : class
+    {
+        services.AddOptions<T>()
+            .Bind(configuration.GetSection(section))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
+        services.AddSingleton(sp => sp.GetRequiredService<IOptions<T>>().Value);
+    }
 }

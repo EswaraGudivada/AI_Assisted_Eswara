@@ -33,7 +33,7 @@ public class ShortLinkServiceCreateTests
 
         var result = await fixture.Service.CreateAsync(new CreateShortLinkCommand("not a url"));
 
-        AssertError(result, "url.invalid", ErrorType.Validation);
+        AssertError(result, "url_invalid", ErrorType.Validation);
         Assert.Empty(fixture.Store.Links);
     }
 
@@ -60,7 +60,7 @@ public class ShortLinkServiceCreateTests
 
         var result = await fixture.Service.CreateAsync(new CreateShortLinkCommand("https://example.com"));
 
-        AssertError(result, "code.generation_failed", ErrorType.Unavailable);
+        AssertError(result, "code_generation_exhausted", ErrorType.Unavailable);
     }
 
     [Fact]
@@ -135,21 +135,74 @@ public class ShortLinkServiceCreateTests
 
         var result = await fixture.Service.CreateAsync(new CreateShortLinkCommand("https://b.example", "promo"));
 
-        AssertError(result, "alias.conflict", ErrorType.Conflict);
+        AssertError(result, "alias_taken", ErrorType.Conflict);
         Assert.Equal("https://a.example/", fixture.Store.Links["promo"].OriginalUrl);
     }
 
     [Theory]
-    [InlineData("api")]
-    [InlineData("x")]
-    [InlineData("bad alias")]
-    public async Task Rejects_invalid_or_reserved_aliases(string alias)
+    [InlineData("admin", "alias_reserved")]
+    [InlineData("Swagger", "alias_reserved")]
+    [InlineData("abc", "alias_invalid")]
+    [InlineData("bad alias", "alias_invalid")]
+    public async Task Rejects_invalid_or_reserved_aliases(string alias, string expectedCode)
     {
         var fixture = new ServiceFixture();
 
         var result = await fixture.Service.CreateAsync(new CreateShortLinkCommand("https://example.com", alias));
 
-        AssertError(result, "alias.invalid", ErrorType.Validation);
+        AssertError(result, expectedCode, ErrorType.Validation);
+    }
+
+    [Theory]
+    [InlineData("http://localhost:8080/admin")]
+    [InlineData("http://127.0.0.1/")]
+    [InlineData("http://10.1.2.3/")]
+    [InlineData("http://169.254.169.254/latest/meta-data/")]
+    [InlineData("http://[::1]/")]
+    public async Task Rejects_private_network_targets(string url)
+    {
+        var fixture = new ServiceFixture();
+
+        var result = await fixture.Service.CreateAsync(new CreateShortLinkCommand(url));
+
+        AssertError(result, "url_private_target", ErrorType.Validation);
+        Assert.Empty(fixture.Store.Links);
+    }
+
+    [Fact]
+    public async Task Allows_private_targets_when_configured_for_development()
+    {
+        var fixture = new ServiceFixture(security: new SecurityOptions { AllowPrivateNetworkTargets = true });
+
+        var result = await fixture.Service.CreateAsync(new CreateShortLinkCommand("http://localhost:3000/"));
+
+        Assert.True(result.IsSuccess);
+    }
+
+    [Theory]
+    [InlineData("https://sho.rt/abc")]
+    [InlineData("https://evil.example/x")]
+    [InlineData("https://sub.evil.example/x")]
+    public async Task Rejects_denied_hosts_and_the_service_itself(string url)
+    {
+        var fixture = new ServiceFixture(security: new SecurityOptions { DeniedHosts = ["evil.example"] });
+
+        var result = await fixture.Service.CreateAsync(new CreateShortLinkCommand(url));
+
+        AssertError(result, "url_host_denied", ErrorType.Validation);
+    }
+
+    [Fact]
+    public async Task Creating_a_link_clears_a_cached_not_found_entry()
+    {
+        var fixture = new ServiceFixture();
+        await fixture.Service.ResolveAsync("newcode", ClickContext.Empty);
+        Assert.Contains("newcode", fixture.Cache.Missing);
+
+        await fixture.Service.CreateAsync(new CreateShortLinkCommand("https://example.com", "newcode"));
+        var resolved = await fixture.Service.ResolveAsync("newcode", ClickContext.Empty);
+
+        Assert.True(resolved.IsSuccess);
     }
 
     [Fact]
@@ -160,7 +213,7 @@ public class ShortLinkServiceCreateTests
         var result = await fixture.Service.CreateAsync(
             new CreateShortLinkCommand("https://example.com", ExpiresAt: fixture.Time.GetUtcNow()));
 
-        AssertError(result, "expiry.invalid", ErrorType.Validation);
+        AssertError(result, "expiry_invalid", ErrorType.Validation);
     }
 
     [Fact]

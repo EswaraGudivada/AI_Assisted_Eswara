@@ -36,8 +36,8 @@ public sealed class UrlShortenerDbContext(DbContextOptions<UrlShortenerDbContext
             click.HasKey(c => c.Id);
             click.Property(c => c.Id).ValueGeneratedOnAdd();
             click.Property(c => c.Code).HasMaxLength(ShortCodeFormat.MaxLength).IsRequired();
-            click.Property(c => c.Referrer).HasMaxLength(255);
-            click.Property(c => c.UserAgent).HasMaxLength(512);
+            click.Property(c => c.RefererHost).HasMaxLength(253);
+            click.Property(c => c.UserAgentFamily).HasMaxLength(16);
             click.HasIndex(c => new { c.Code, c.OccurredAt });
         });
     }

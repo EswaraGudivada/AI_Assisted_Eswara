@@ -1,5 +1,5 @@
 using UrlShortener.Core.Domain;
-using UrlShortener.Infrastructure.InMemory;
+using UrlShortener.UnitTests.Fakes.InMemory;
 
 namespace UrlShortener.UnitTests.Infrastructure;
 
@@ -41,7 +41,7 @@ public class InMemoryRepositoryTests
         var link = await links.GetByCodeAsync("abc");
         Assert.Equal(3, link!.ClickCount);
         Assert.Equal(Now.AddMinutes(5), link.LastAccessedAt);
-        Assert.Equal(2, (await clicks.GetSinceAsync("abc", Now.AddMinutes(1))).Count);
+        Assert.Equal(2, (await clicks.GetRangeAsync("abc", Now.AddMinutes(1), DateTimeOffset.MaxValue)).Count);
     }
 
     [Fact]

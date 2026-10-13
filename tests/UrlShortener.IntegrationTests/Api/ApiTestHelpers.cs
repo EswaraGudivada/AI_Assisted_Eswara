@@ -7,7 +7,7 @@ internal static class ApiTestHelpers
 {
     public static async Task<ShortLinkResponse> CreateLinkAsync(this HttpClient client, string url, string? alias = null, DateTimeOffset? expiresAt = null)
     {
-        var response = await client.PostAsJsonAsync("/api/links", new CreateShortLinkRequest(url, alias, expiresAt));
+        var response = await client.PostAsJsonAsync("/api/v1/links", new CreateShortLinkRequest(url, alias, expiresAt));
         response.EnsureSuccessStatusCode();
         return (await response.Content.ReadFromJsonAsync<ShortLinkResponse>())!;
     }

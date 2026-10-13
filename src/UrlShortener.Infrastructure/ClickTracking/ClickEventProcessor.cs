@@ -1,9 +1,10 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
+using UrlShortener.Core;
 using UrlShortener.Core.Abstractions;
 using UrlShortener.Core.Domain;
+using UrlShortener.Infrastructure.Diagnostics;
 
 namespace UrlShortener.Infrastructure.ClickTracking;
 
@@ -13,13 +14,14 @@ namespace UrlShortener.Infrastructure.ClickTracking;
 internal sealed partial class ClickEventProcessor(
     ChannelClickTracker tracker,
     IServiceScopeFactory scopeFactory,
-    IOptions<ClickTrackingOptions> options,
+    AnalyticsOptions options,
+    ShortenerMetrics metrics,
     ILogger<ClickEventProcessor> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var reader = tracker.Reader;
-        var batchSize = options.Value.BatchSize;
+        var batchSize = options.BatchSize;
         var batch = new List<ClickEvent>(batchSize);
 
         try
@@ -54,7 +56,7 @@ internal sealed partial class ClickEventProcessor(
 
     private async Task DrainAsync()
     {
-        var batchSize = options.Value.BatchSize;
+        var batchSize = options.BatchSize;
         var batch = new List<ClickEvent>(batchSize);
         while (tracker.Reader.TryRead(out var clickEvent))
         {
@@ -81,6 +83,7 @@ internal sealed partial class ClickEventProcessor(
             await using var scope = scopeFactory.CreateAsyncScope();
             var repository = scope.ServiceProvider.GetRequiredService<IClickEventRepository>();
             await repository.RecordBatchAsync(batch, CancellationToken.None);
+            metrics.ClicksPersisted(batch.Count);
         }
         catch (Exception ex)
         {

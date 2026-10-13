@@ -8,7 +8,6 @@ public class TargetUrlValidatorTests
     private static readonly ShortenerOptions Options = new()
     {
         BaseUrl = "https://sho.rt",
-        BlockedHosts = ["evil.example"],
         MaxUrlLength = 100,
     };
 
@@ -33,9 +32,6 @@ public class TargetUrlValidatorTests
     [InlineData("javascript:alert(1)", "http and https")]
     [InlineData("file:///etc/passwd", "http and https")]
     [InlineData("https://user:pass@example.com", "credentials")]
-    [InlineData("https://sho.rt/abc", "not allowed")]
-    [InlineData("https://evil.example/x", "not allowed")]
-    [InlineData("https://sub.evil.example/x", "not allowed")]
     public void Rejects_invalid_urls(string? input, string expectedMessageFragment)
     {
         Assert.False(TargetUrlValidator.TryNormalize(input, Options, out var normalized, out var error));
@@ -50,11 +46,5 @@ public class TargetUrlValidatorTests
 
         Assert.False(TargetUrlValidator.TryNormalize(url, Options, out _, out var error));
         Assert.Contains("100", error, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Does_not_block_hosts_that_merely_end_with_a_blocked_name()
-    {
-        Assert.True(TargetUrlValidator.TryNormalize("https://notevil.example/x", Options, out _, out _));
     }
 }

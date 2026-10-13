@@ -1,10 +1,12 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
+using UrlShortener.Core;
 using UrlShortener.Core.Abstractions;
 using UrlShortener.Core.Domain;
 using UrlShortener.Infrastructure.ClickTracking;
-using UrlShortener.Infrastructure.InMemory;
+using UrlShortener.Infrastructure.Diagnostics;
+using UrlShortener.UnitTests.Fakes;
+using UrlShortener.UnitTests.Fakes.InMemory;
 
 namespace UrlShortener.UnitTests.Infrastructure;
 
@@ -19,6 +21,7 @@ public class ClickPipelineTests
         Assert.True(tracker.TryTrack(Click()));
         Assert.False(tracker.TryTrack(Click()));
         Assert.Equal(1, tracker.DroppedCount);
+        Assert.Equal(2, tracker.QueueDepth);
     }
 
     [Fact]
@@ -64,8 +67,10 @@ public class ClickPipelineTests
         var failing = new FlakyClickRepository(failuresBeforeSuccess: 1);
         var services = new ServiceCollection();
         services.AddSingleton<IClickEventRepository>(failing);
-        services.AddSingleton(Options.Create(new ClickTrackingOptions { QueueCapacity = 100, BatchSize = 1 }));
+        services.AddSingleton(new AnalyticsOptions { QueueCapacity = 100, BatchSize = 1 });
         services.AddLogging();
+        services.AddMetrics();
+        services.AddSingleton<ShortenerMetrics>();
         services.AddSingleton<ChannelClickTracker>();
         services.AddSingleton<ClickEventProcessor>();
         using var provider = services.BuildServiceProvider();
@@ -86,7 +91,9 @@ public class ClickPipelineTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton(Options.Create(new ClickTrackingOptions { QueueCapacity = 10_000, BatchSize = batchSize }));
+        services.AddMetrics();
+        services.AddSingleton<ShortenerMetrics>();
+        services.AddSingleton(new AnalyticsOptions { QueueCapacity = 10_000, BatchSize = batchSize });
         services.AddSingleton<InMemoryLinkStore>();
         services.AddScoped<IClickEventRepository, InMemoryClickEventRepository>();
         services.AddSingleton<ChannelClickTracker>();
@@ -98,7 +105,7 @@ public class ClickPipelineTests
     }
 
     private static ChannelClickTracker CreateTracker(int capacity) =>
-        new(Options.Create(new ClickTrackingOptions { QueueCapacity = capacity }), NullLogger<ChannelClickTracker>.Instance);
+        new(new AnalyticsOptions { QueueCapacity = capacity }, TestMetrics.Create(), NullLogger<ChannelClickTracker>.Instance);
 
     private static ClickEvent Click() => new() { Code = "abc", OccurredAt = DateTimeOffset.UtcNow };
 
@@ -136,7 +143,7 @@ public class ClickPipelineTests
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyList<ClickEvent>> GetSinceAsync(string code, DateTimeOffset since, CancellationToken cancellationToken = default) =>
+        public Task<IReadOnlyList<ClickEvent>> GetRangeAsync(string code, DateTimeOffset from, DateTimeOffset to, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<ClickEvent>>([]);
     }
 }

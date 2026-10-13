@@ -13,19 +13,19 @@ public class ShortLinkServiceResolveTests
         var fixture = new ServiceFixture();
         var code = (await fixture.Service.CreateAsync(new CreateShortLinkCommand("https://example.com/a"))).Value.Link.Code;
 
-        var result = await fixture.Service.ResolveAsync(code, new ClickContext("https://Twitter.com/some/post?id=1", "Mozilla/5.0"));
+        var result = await fixture.Service.ResolveAsync(code, new ClickContext("https://Twitter.com/some/post?id=1", "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Chrome/126.0 Safari/537.36"));
 
         Assert.True(result.IsSuccess);
         Assert.Equal("https://example.com/a", result.Value.OriginalUrl);
         var click = Assert.Single(fixture.Tracker.Events);
         Assert.Equal(code, click.Code);
-        Assert.Equal("twitter.com", click.Referrer);
-        Assert.Equal("Mozilla/5.0", click.UserAgent);
+        Assert.Equal("twitter.com", click.RefererHost);
+        Assert.Equal("chrome", click.UserAgentFamily);
         Assert.Equal(fixture.Time.GetUtcNow(), click.OccurredAt);
     }
 
     [Fact]
-    public async Task Still_redirects_when_the_click_cannot_be_tracked()
+    public async Task Still_resolves_when_the_click_cannot_be_tracked()
     {
         var fixture = new ServiceFixture();
         fixture.Tracker.Accept = false;
@@ -51,6 +51,19 @@ public class ShortLinkServiceResolveTests
     }
 
     [Fact]
+    public async Task Remembers_unknown_codes_so_repeated_guesses_skip_storage()
+    {
+        var fixture = new ServiceFixture();
+
+        await fixture.Service.ResolveAsync("guess01", ClickContext.Empty);
+        await fixture.Links.TryAddAsync(new ShortLink { Code = "guess01", OriginalUrl = "https://sneaky.example/" });
+        var second = await fixture.Service.ResolveAsync("guess01", ClickContext.Empty);
+
+        Assert.Contains("guess01", fixture.Cache.Missing);
+        Assert.Equal(ErrorType.NotFound, second.Error!.Type);
+    }
+
+    [Fact]
     public async Task Returns_gone_once_the_link_has_expired()
     {
         var fixture = new ServiceFixture();
@@ -62,7 +75,7 @@ public class ShortLinkServiceResolveTests
         fixture.Time.Advance(TimeSpan.FromHours(1));
         var result = await fixture.Service.ResolveAsync(code, ClickContext.Empty);
 
-        Assert.Equal("link.expired", result.Error!.Code);
+        Assert.Equal("link_expired", result.Error!.Code);
         Assert.Equal(ErrorType.Gone, result.Error.Type);
     }
 
@@ -78,7 +91,7 @@ public class ShortLinkServiceResolveTests
         var result = await fixture.Service.ResolveAsync(code, ClickContext.Empty);
 
         Assert.True(deactivated.IsSuccess);
-        Assert.Equal("link.deactivated", result.Error!.Code);
+        Assert.Equal("link_deactivated", result.Error!.Code);
     }
 
     [Fact]
@@ -86,7 +99,7 @@ public class ShortLinkServiceResolveTests
     {
         var fixture = new ServiceFixture();
         var cached = new ShortLink { Code = "cached1", OriginalUrl = "https://cached.example/" };
-        fixture.Cache.Set(cached);
+        fixture.Cache.StoreFound(cached);
 
         var result = await fixture.Service.ResolveAsync("cached1", ClickContext.Empty);
 
@@ -112,5 +125,15 @@ public class ShortLinkServiceResolveTests
         var result = await fixture.Service.DeactivateAsync("unknown");
 
         Assert.Equal(ErrorType.NotFound, result.Error!.Type);
+    }
+
+    [Fact]
+    public async Task Deactivating_twice_is_safe()
+    {
+        var fixture = new ServiceFixture();
+        var code = (await fixture.Service.CreateAsync(new CreateShortLinkCommand("https://example.com"))).Value.Link.Code;
+
+        Assert.True((await fixture.Service.DeactivateAsync(code)).IsSuccess);
+        Assert.True((await fixture.Service.DeactivateAsync(code)).IsSuccess);
     }
 }

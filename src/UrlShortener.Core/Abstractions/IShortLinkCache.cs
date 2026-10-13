@@ -1,13 +1,22 @@
-using System.Diagnostics.CodeAnalysis;
 using UrlShortener.Core.Domain;
 
 namespace UrlShortener.Core.Abstractions;
 
+public enum CacheLookup
+{
+    Unknown,
+    Found,
+    KnownMissing,
+}
+
+/// <summary>Link cache with negative entries, so repeated guesses of absent codes do not hit the database.</summary>
 public interface IShortLinkCache
 {
-    bool TryGet(string code, [NotNullWhen(true)] out ShortLink? link);
+    CacheLookup Lookup(string code, out ShortLink? link);
 
-    void Set(ShortLink link);
+    void StoreFound(ShortLink link);
 
-    void Remove(string code);
+    void StoreMissing(string code);
+
+    void Invalidate(string code);
 }

@@ -4,7 +4,7 @@ namespace UrlShortener.Core.Validation;
 
 public static partial class ShortCodeFormat
 {
-    public const int MinLength = 3;
+    public const int MinLength = 4;
     public const int MaxLength = 32;
 
     public static bool IsValid(string? code) =>

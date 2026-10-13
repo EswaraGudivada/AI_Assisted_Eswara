@@ -2,6 +2,7 @@ using UrlShortener.Core.Abstractions;
 using UrlShortener.Core.Common;
 using UrlShortener.Core.Domain;
 using UrlShortener.Core.Models;
+using UrlShortener.Core.Safety;
 using UrlShortener.Core.Validation;
 
 namespace UrlShortener.Core.Services;
@@ -12,14 +13,13 @@ public sealed class ShortLinkService(
     IShortCodeGenerator codeGenerator,
     IShortLinkCache cache,
     IClickTracker clickTracker,
+    IUrlSafetyValidator safety,
     ShortenerOptions options,
+    AnalyticsOptions analytics,
     TimeProvider timeProvider) : IShortLinkService
 {
-    public const int MaxPageSize = 100;
-    public const int TopReferrerCount = 5;
     public const string DirectReferrer = "(direct)";
-    internal const int MaxReferrerLength = 255;
-    internal const int MaxUserAgentLength = 512;
+    internal const int MaxReferrerLength = 253;
 
     public async Task<Result<CreateShortLinkResult>> CreateAsync(
         CreateShortLinkCommand command,
@@ -32,6 +32,11 @@ public sealed class ShortLinkService(
             return ShortLinkErrors.InvalidUrl(urlError);
         }
 
+        if (safety.Validate(new Uri(url)) is { } unsafeTarget)
+        {
+            return unsafeTarget;
+        }
+
         var now = timeProvider.GetUtcNow();
         var expiresAt = command.ExpiresAt?.ToUniversalTime();
         if (expiresAt is { } expiry && expiry <= now)
@@ -39,9 +44,9 @@ public sealed class ShortLinkService(
             return ShortLinkErrors.InvalidExpiry("The expiry must be in the future.");
         }
 
-        if (!string.IsNullOrWhiteSpace(command.CustomAlias))
+        if (!string.IsNullOrWhiteSpace(command.Alias))
         {
-            return await CreateWithAliasAsync(command.CustomAlias.Trim(), url, now, expiresAt, cancellationToken);
+            return await CreateWithAliasAsync(command.Alias.Trim(), url, now, expiresAt, cancellationToken);
         }
 
         if (options.DeduplicateUrls && expiresAt is null)
@@ -64,11 +69,12 @@ public sealed class ShortLinkService(
             var link = NewLink(code, url, now, expiresAt, isCustomAlias: false);
             if (await repository.TryAddAsync(link, cancellationToken))
             {
+                cache.Invalidate(code);
                 return new CreateShortLinkResult(link, Created: true);
             }
         }
 
-        return ShortLinkErrors.CodeGenerationFailed;
+        return ShortLinkErrors.CodeGenerationExhausted;
     }
 
     public async Task<Result<ShortLink>> ResolveAsync(
@@ -83,15 +89,10 @@ public sealed class ShortLinkService(
             return ShortLinkErrors.NotFound(code);
         }
 
-        if (!cache.TryGet(code, out var link))
+        var link = await FindCachedAsync(code, cancellationToken);
+        if (link is null)
         {
-            link = await repository.GetByCodeAsync(code, cancellationToken);
-            if (link is null)
-            {
-                return ShortLinkErrors.NotFound(code);
-            }
-
-            cache.Set(link);
+            return ShortLinkErrors.NotFound(code);
         }
 
         var now = timeProvider.GetUtcNow();
@@ -105,12 +106,13 @@ public sealed class ShortLinkService(
             return ShortLinkErrors.Expired(code);
         }
 
+        // Queued after the decision so it can never change the answer; a full queue only loses the click.
         clickTracker.TryTrack(new ClickEvent
         {
             Code = link.Code,
             OccurredAt = now,
-            Referrer = NormalizeReferrer(context.Referrer),
-            UserAgent = Truncate(context.UserAgent, MaxUserAgentLength),
+            RefererHost = NormalizeReferrer(context.Referrer),
+            UserAgentFamily = UserAgentClassifier.Classify(context.UserAgent),
         });
 
         return link;
@@ -129,69 +131,111 @@ public sealed class ShortLinkService(
             return ShortLinkErrors.NotFound(code);
         }
 
-        cache.Remove(code);
+        // Evict after the write commits so a concurrent read cannot re-cache the old row.
+        cache.Invalidate(code);
         return true;
     }
 
     public async Task<Result<PagedResult<ShortLink>>> ListAsync(
-        int page,
-        int pageSize,
+        int? page,
+        int? pageSize,
         CancellationToken cancellationToken = default)
     {
-        if (page < 1)
+        var pageNumber = page ?? 1;
+        var size = pageSize ?? options.DefaultPageSize;
+
+        if (pageNumber < 1)
         {
             return ShortLinkErrors.InvalidPaging("The page must be 1 or greater.");
         }
 
-        if (pageSize is < 1 or > MaxPageSize)
+        if (size < 1 || size > options.MaxPageSize)
         {
-            return ShortLinkErrors.InvalidPaging($"The page size must be between 1 and {MaxPageSize}.");
+            return ShortLinkErrors.InvalidPaging($"The page size must be between 1 and {options.MaxPageSize}.");
         }
 
-        return await repository.ListAsync(page, pageSize, cancellationToken);
+        return await repository.ListAsync(pageNumber, size, cancellationToken);
     }
 
     public async Task<Result<LinkStatistics>> GetStatisticsAsync(
         string code,
-        int days,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
         CancellationToken cancellationToken = default)
     {
-        if (days < 1 || days > options.MaxStatsWindowDays)
-        {
-            return ShortLinkErrors.InvalidStatsWindow(options.MaxStatsWindowDays);
-        }
-
         var linkResult = await GetAsync(code, cancellationToken);
         if (!linkResult.IsSuccess)
         {
             return linkResult.Error!;
         }
 
-        var link = linkResult.Value;
-        var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
-        var firstDay = today.AddDays(-(days - 1));
-        var since = new DateTimeOffset(firstDay.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero);
+        var windowEnd = (to ?? timeProvider.GetUtcNow()).ToUniversalTime();
+        var windowStart = (from ?? windowEnd.AddDays(-analytics.DefaultStatsWindowDays)).ToUniversalTime();
 
-        var events = await clickRepository.GetSinceAsync(link.Code, since, cancellationToken);
+        if (windowStart > windowEnd)
+        {
+            return ShortLinkErrors.RangeInverted;
+        }
+
+        if ((windowEnd - windowStart).TotalDays > analytics.MaxStatsRangeDays)
+        {
+            return ShortLinkErrors.RangeTooWide(analytics.MaxStatsRangeDays);
+        }
+
+        var link = linkResult.Value;
+        var events = await clickRepository.GetRangeAsync(link.Code, windowStart, windowEnd, cancellationToken);
 
         var clicksByDay = events
             .GroupBy(e => DateOnly.FromDateTime(e.OccurredAt.UtcDateTime))
-            .ToDictionary(g => g.Key, g => g.Count());
+            .ToDictionary(g => g.Key, g => g.LongCount());
 
-        var daily = Enumerable.Range(0, days)
+        var firstDay = DateOnly.FromDateTime(windowStart.UtcDateTime);
+        var lastDay = DateOnly.FromDateTime(windowEnd.UtcDateTime);
+        var daily = Enumerable.Range(0, lastDay.DayNumber - firstDay.DayNumber + 1)
             .Select(offset => firstDay.AddDays(offset))
             .Select(day => new DailyClickCount(day, clicksByDay.GetValueOrDefault(day)))
             .ToList();
 
         var topReferrers = events
-            .GroupBy(e => e.Referrer ?? DirectReferrer, StringComparer.Ordinal)
-            .Select(g => new ReferrerCount(g.Key, g.Count()))
+            .GroupBy(e => e.RefererHost ?? DirectReferrer, StringComparer.Ordinal)
+            .Select(g => new ReferrerClickCount(g.Key, g.LongCount()))
             .OrderByDescending(r => r.Clicks)
             .ThenBy(r => r.Referrer, StringComparer.Ordinal)
-            .Take(TopReferrerCount)
+            .Take(analytics.TopReferrerCount)
             .ToList();
 
-        return new LinkStatistics(link.Code, link.ClickCount, link.LastAccessedAt, days, daily, topReferrers);
+        return new LinkStatistics(
+            link.Code,
+            link.ClickCount,
+            link.LastAccessedAt,
+            windowStart,
+            windowEnd,
+            events.Count,
+            daily,
+            topReferrers);
+    }
+
+    private async Task<ShortLink?> FindCachedAsync(string code, CancellationToken cancellationToken)
+    {
+        switch (cache.Lookup(code, out var cached))
+        {
+            case CacheLookup.Found:
+                return cached;
+            case CacheLookup.KnownMissing:
+                return null;
+        }
+
+        var link = await repository.GetByCodeAsync(code, cancellationToken);
+        if (link is null)
+        {
+            cache.StoreMissing(code);
+        }
+        else
+        {
+            cache.StoreFound(link);
+        }
+
+        return link;
     }
 
     private async Task<Result<CreateShortLinkResult>> CreateWithAliasAsync(
@@ -201,15 +245,27 @@ public sealed class ShortLinkService(
         DateTimeOffset? expiresAt,
         CancellationToken cancellationToken)
     {
-        if (!AliasValidator.TryValidate(alias, options, out var aliasError))
+        if (!ShortCodeFormat.IsValid(alias))
         {
-            return ShortLinkErrors.InvalidAlias(aliasError);
+            return ShortLinkErrors.InvalidAlias(
+                $"An alias must be {ShortCodeFormat.MinLength}-{ShortCodeFormat.MaxLength} characters " +
+                "and contain only letters, digits, '-' or '_'.");
         }
 
+        if (AliasValidator.IsReserved(alias, options))
+        {
+            return ShortLinkErrors.ReservedAlias(alias);
+        }
+
+        // No pre-check: the unique index decides, so two concurrent claims cannot both win.
         var link = NewLink(alias, url, now, expiresAt, isCustomAlias: true);
-        return await repository.TryAddAsync(link, cancellationToken)
-            ? new CreateShortLinkResult(link, Created: true)
-            : ShortLinkErrors.AliasTaken(alias);
+        if (!await repository.TryAddAsync(link, cancellationToken))
+        {
+            return ShortLinkErrors.AliasTaken(alias);
+        }
+
+        cache.Invalidate(alias);
+        return new CreateShortLinkResult(link, Created: true);
     }
 
     private static ShortLink NewLink(string code, string url, DateTimeOffset now, DateTimeOffset? expiresAt, bool isCustomAlias) =>
@@ -231,17 +287,7 @@ public sealed class ShortLinkService(
             return null;
         }
 
-        return Truncate(uri.Host.ToLowerInvariant(), MaxReferrerLength);
-    }
-
-    private static string? Truncate(string? value, int maxLength)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return null;
-        }
-
-        var trimmed = value.Trim();
-        return trimmed.Length <= maxLength ? trimmed : trimmed[..maxLength];
+        var host = uri.Host.ToLowerInvariant();
+        return host.Length <= MaxReferrerLength ? host : host[..MaxReferrerLength];
     }
 }

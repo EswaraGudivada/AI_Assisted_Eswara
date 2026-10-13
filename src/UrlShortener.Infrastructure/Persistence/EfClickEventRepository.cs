@@ -35,11 +35,12 @@ internal sealed class EfClickEventRepository(UrlShortenerDbContext db) : IClickE
         db.ChangeTracker.Clear();
     }
 
-    public async Task<IReadOnlyList<ClickEvent>> GetSinceAsync(
+    public async Task<IReadOnlyList<ClickEvent>> GetRangeAsync(
         string code,
-        DateTimeOffset since,
+        DateTimeOffset from,
+        DateTimeOffset to,
         CancellationToken cancellationToken = default) =>
         await db.ClickEvents.AsNoTracking()
-            .Where(c => c.Code == code && c.OccurredAt >= since)
+            .Where(c => c.Code == code && c.OccurredAt >= from && c.OccurredAt <= to)
             .ToListAsync(cancellationToken);
 }

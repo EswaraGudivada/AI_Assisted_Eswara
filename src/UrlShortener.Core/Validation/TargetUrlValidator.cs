@@ -53,28 +53,8 @@ public static class TargetUrlValidator
             return false;
         }
 
-        if (IsBlockedHost(uri.Host, options))
-        {
-            error = $"Links to host '{uri.Host}' are not allowed.";
-            return false;
-        }
-
         normalized = uri.AbsoluteUri;
         error = null;
         return true;
-    }
-
-    private static bool IsBlockedHost(string host, ShortenerOptions options)
-    {
-        var blocked = options.BlockedHosts.AsEnumerable();
-        if (Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var baseUri))
-        {
-            blocked = blocked.Append(baseUri.Host);
-        }
-
-        return blocked
-            .Where(b => !string.IsNullOrWhiteSpace(b))
-            .Any(b => host.Equals(b, StringComparison.OrdinalIgnoreCase)
-                      || host.EndsWith("." + b, StringComparison.OrdinalIgnoreCase));
     }
 }

@@ -1,26 +1,31 @@
 using Microsoft.Extensions.Time.Testing;
 using UrlShortener.Core;
 using UrlShortener.Core.Abstractions;
+using UrlShortener.Core.Safety;
 using UrlShortener.Core.Services;
-using UrlShortener.Infrastructure.InMemory;
+using UrlShortener.UnitTests.Fakes.InMemory;
 
 namespace UrlShortener.UnitTests.Fakes;
 
 internal sealed class ServiceFixture
 {
-    public ServiceFixture(IShortCodeGenerator? generator = null, ShortenerOptions? options = null)
+    public ServiceFixture(IShortCodeGenerator? generator = null, ShortenerOptions? options = null, SecurityOptions? security = null)
     {
         Store = new InMemoryLinkStore();
         Links = new InMemoryShortLinkRepository(Store);
         Clicks = new InMemoryClickEventRepository(Store);
         Options = options ?? new ShortenerOptions { BaseUrl = "https://sho.rt" };
+        Security = security ?? new SecurityOptions();
+        var safety = new UrlSafetyValidator([new PrivateNetworkRule(Security), new DeniedHostRule(Security, Options)]);
         Service = new ShortLinkService(
             Links,
             Clicks,
             generator ?? new RandomShortCodeGenerator(),
             Cache,
             Tracker,
+            safety,
             Options,
+            Analytics,
             Time);
     }
 
@@ -37,6 +42,10 @@ internal sealed class ServiceFixture
     public RecordingClickTracker Tracker { get; } = new();
 
     public ShortenerOptions Options { get; }
+
+    public SecurityOptions Security { get; }
+
+    public AnalyticsOptions Analytics { get; } = new();
 
     public ShortLinkService Service { get; }
 

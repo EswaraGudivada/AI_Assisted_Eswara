@@ -16,7 +16,7 @@ public sealed class SqliteRepositoryTests : IAsyncLifetime
         await _connection.OpenAsync();
         _options = new DbContextOptionsBuilder<UrlShortenerDbContext>().UseSqlite(_connection).Options;
         await using var db = new UrlShortenerDbContext(_options);
-        await db.Database.EnsureCreatedAsync();
+        await db.Database.MigrateAsync();
     }
 
     public async Task DisposeAsync() => await _connection.DisposeAsync();
@@ -109,17 +109,17 @@ public sealed class SqliteRepositoryTests : IAsyncLifetime
 
         await using var readDb = new UrlShortenerDbContext(_options);
         var link = await new EfShortLinkRepository(readDb).GetByCodeAsync("clk");
-        var recent = await new EfClickEventRepository(readDb).GetSinceAsync("clk", Now.AddDays(-1));
+        var recent = await new EfClickEventRepository(readDb).GetRangeAsync("clk", Now.AddDays(-1), Now.AddDays(1));
 
         Assert.Equal(3, link!.ClickCount);
         Assert.Equal(Now.AddMinutes(1), link.LastAccessedAt);
         Assert.Equal(2, recent.Count);
-        Assert.Contains(recent, c => c.Referrer == "ref.example");
+        Assert.Contains(recent, c => c.RefererHost == "ref.example");
     }
 
     private static ShortLink Link(string code, string url = "https://example.com/") =>
         new() { Code = code, OriginalUrl = url, CreatedAt = Now };
 
     private static ClickEvent Click(string code, DateTimeOffset at, string? referrer = null) =>
-        new() { Code = code, OccurredAt = at, Referrer = referrer };
+        new() { Code = code, OccurredAt = at, RefererHost = referrer };
 }

@@ -1,4 +1,3 @@
-using System.Diagnostics.CodeAnalysis;
 using UrlShortener.Core.Abstractions;
 using UrlShortener.Core.Domain;
 
@@ -39,9 +38,25 @@ internal sealed class DictionaryCache : IShortLinkCache
 {
     public Dictionary<string, ShortLink> Entries { get; } = new(StringComparer.Ordinal);
 
-    public bool TryGet(string code, [NotNullWhen(true)] out ShortLink? link) => Entries.TryGetValue(code, out link);
+    public HashSet<string> Missing { get; } = new(StringComparer.Ordinal);
 
-    public void Set(ShortLink link) => Entries[link.Code] = link;
+    public CacheLookup Lookup(string code, out ShortLink? link)
+    {
+        if (Entries.TryGetValue(code, out link))
+        {
+            return CacheLookup.Found;
+        }
 
-    public void Remove(string code) => Entries.Remove(code);
+        return Missing.Contains(code) ? CacheLookup.KnownMissing : CacheLookup.Unknown;
+    }
+
+    public void StoreFound(ShortLink link) => Entries[link.Code] = link;
+
+    public void StoreMissing(string code) => Missing.Add(code);
+
+    public void Invalidate(string code)
+    {
+        Entries.Remove(code);
+        Missing.Remove(code);
+    }
 }

@@ -34,7 +34,7 @@ flowchart LR
 | Activity | AI contribution | Engineer control (required before acceptance) |
 |---|---|---|
 | Requirement analysis | Draft ambiguity list and acceptance criteria | Confirm or change each decision; over-scoped items (geo-IP analytics, auth) were left out pending approval |
-| Design | Proposed layering, component list, data model | Approve layering, redirect status, delete semantics and privacy scope |
+| Design | Proposed layering, component list, data model | Approve layering, lookup response (200 + URL), delete semantics and privacy scope |
 | Implementation | Generated most production code | Review every file; options rejected during implementation are listed below |
 | Debugging | Root-caused the intermittent drain-on-shutdown test failure | Root cause and fix verified with repeated test runs; review the fix |
 | Test generation | Generated table-driven unit tests and integration tests | Review that tests assert behaviour; edge cases included (Linux `/path` → `file://`, subdomain blocking, concurrency races) |
@@ -51,7 +51,7 @@ flowchart LR
 | # | Option considered | Outcome | Rationale |
 |---|---|---|---|
 | 1 | Layered solution (Core / Infrastructure / Api / tests) | **Accepted** | Testability and replaceable storage |
-| 2 | Redirect using `301 Moved Permanently` | **Rejected → `302` + `no-cache`** | `301` is cached by browsers; clicks and deactivation would be lost |
+| 2 | Redirect using `301 Moved Permanently` | **Rejected → `302` + `no-cache`** (later superseded by #17) | `301` is cached by browsers; clicks and deactivation would be lost |
 | 3 | Sequential integer IDs encoded to Base62 | **Rejected → CSPRNG codes** (`RandomNumberGenerator.GetString`) | Sequential codes are enumerable and leak volume |
 | 4 | Hard delete endpoint | **Edited → soft delete, `410 Gone`** | Prevents code reuse; preserves analytics |
 | 5 | `catch (DbUpdateException)` treated as duplicate code | **Edited → filter on `SqliteException` code 19** | Other failures must not be misreported as conflicts |
@@ -66,6 +66,14 @@ flowchart LR
 | 14 | Mocking library for unit tests | **Rejected → hand-written fakes** | Fewer dependencies; fakes double as executable documentation |
 | 15 | Route regex constraint for `{code}` | **Rejected → format check in service** | Escaping-heavy route regex was error-prone; service check also protects storage |
 | 16 | Generated README sections | **Edited** | Numbers (tests, coverage) and behaviours verified against actual runs |
+| 17 | Keep `302` redirect for `GET /{code}` when aligning with the reference repository | **Changed by owner → `200` + URL as JSON, `no-store`** | Owner chose the reference behaviour: the result is visible in Swagger and API clients |
+| 18 | `EnsureCreated` at startup | **Replaced → EF Core migrations + `Database:AutoMigrate`** | Schema changes become reviewable and repeatable; pipelines can apply them instead |
+| 19 | Keep an in-memory storage provider | **Removed from the app → test fakes only** | One production storage path; unit tests still use fast fakes |
+| 20 | `400` for every invalid input | **Edited → `422` for readable-but-unacceptable input, `400` for unreadable bodies** | Lets clients tell malformed requests from rule violations |
+| 21 | Store a truncated user-agent string | **Rejected → closed set of browser families** | A raw UA string helps fingerprinting; a family is enough for analytics |
+| 22 | Fixed-window limit on writes | **Edited → token bucket** | No double burst across a window edge |
+| 23 | Resolve DNS to block private targets | **Rejected → literal IP/host-name checks only** | DNS answers can change after the check (rebinding) and the service never fetches targets |
+
 
 ## 4. Quality gates applied to every AI output
 
@@ -77,7 +85,7 @@ flowchart LR
 | Coverage | coverlet (Cobertura) | CI artifact |
 | Dependency security | `dotnet list package --vulnerable --include-transitive` | CI |
 | Configuration safety | `ValidateOnStart` option validation | App startup |
-| Performance sanity | Hot path review: no DB write on redirect, cache-aside, cheap format check before I/O | Code review |
+| Performance sanity | Hot path review: no DB write on lookup, cache-aside, cheap format check before I/O | Code review |
 | Runtime smoke test | `dotnet run` + curl script, Docker build/run | Manual, before sign-off |
 
 ## 5. Secure AI usage
@@ -95,14 +103,14 @@ flowchart LR
 
 High-impact changes require explicit approval by the owning engineer before release:
 
-- [ ] **Public API contract** – routes, status codes, `errorCode` values, response shapes.
+- [ ] **Public API contract** – routes (`/api/v1`), status codes, `code` values, response shapes.
 - [ ] **Data model** – `short_links` / `click_events` schema, indexes, timestamp storage.
-- [ ] **Security controls** – URL validation rules, blocked hosts, rate limits, security headers.
-- [ ] **Privacy scope** – which click attributes are stored (currently: time, referrer host, truncated UA).
-- [ ] **Irreversible decisions** – case-sensitive codes, `302` redirect semantics, never reusing codes.
+- [ ] **Security controls** – URL validation and private-network rules, denied hosts, rate limits, security headers, Swagger gating.
+- [ ] **Privacy scope** – which click attributes are stored (currently: time, referrer host, browser family).
+- [ ] **Irreversible decisions** – case-sensitive codes, `200`-with-URL lookup (no redirect), never reusing codes.
 - [ ] **Operational defaults** – cache TTL, queue capacity, batch size, `BaseUrl` set for production.
 - [ ] All quality gates green in CI.
-- [ ] Known limitations accepted or ticketed (auth, migrations, durable analytics, URL reputation checks).
+- [ ] Known limitations accepted or ticketed (auth, durable analytics, URL reputation checks, multi-instance cache).
 
 ## 7. Ownership statement
 

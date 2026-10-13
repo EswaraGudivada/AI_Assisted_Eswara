@@ -20,43 +20,61 @@ public class ShortLinkServiceQueryTests
         await fixture.Service.ResolveAsync(code, ClickContext.Empty);
         await fixture.FlushClicksAsync();
 
-        var stats = (await fixture.Service.GetStatisticsAsync(code, 3)).Value;
+        var from = new DateTimeOffset(2026, 1, 15, 0, 0, 0, TimeSpan.Zero);
+        var stats = (await fixture.Service.GetStatisticsAsync(code, from, null)).Value;
 
         Assert.Equal(4, stats.TotalClicks);
+        Assert.Equal(4, stats.ClicksInRange);
+        Assert.Equal(from, stats.From);
+        Assert.Equal(fixture.Time.GetUtcNow(), stats.To);
         Assert.Equal(fixture.Time.GetUtcNow(), stats.LastAccessedAt);
         Assert.Equal(
             [new DailyClickCount(new DateOnly(2026, 1, 15), 1), new DailyClickCount(new DateOnly(2026, 1, 16), 0), new DailyClickCount(new DateOnly(2026, 1, 17), 3)],
-            stats.DailyClicks);
-        Assert.Equal(new ReferrerCount("a.example", 2), stats.TopReferrers[0]);
-        Assert.Contains(new ReferrerCount(ShortLinkService.DirectReferrer, 1), stats.TopReferrers);
+            stats.Daily);
+        Assert.Equal(new ReferrerClickCount("a.example", 2), stats.TopReferrers[0]);
+        Assert.Contains(new ReferrerClickCount(ShortLinkService.DirectReferrer, 1), stats.TopReferrers);
     }
 
     [Fact]
-    public async Task Statistics_window_excludes_older_clicks_but_total_includes_them()
+    public async Task Default_window_is_the_last_30_days_and_total_still_counts_older_clicks()
     {
         var fixture = new ServiceFixture();
         var code = (await fixture.Service.CreateAsync(new CreateShortLinkCommand("https://example.com"))).Value.Link.Code;
         await fixture.Service.ResolveAsync(code, ClickContext.Empty);
-        fixture.Time.Advance(TimeSpan.FromDays(10));
         await fixture.FlushClicksAsync();
+        fixture.Time.Advance(TimeSpan.FromDays(40));
 
-        var stats = (await fixture.Service.GetStatisticsAsync(code, 7)).Value;
+        var stats = (await fixture.Service.GetStatisticsAsync(code, null, null)).Value;
 
         Assert.Equal(1, stats.TotalClicks);
-        Assert.Equal(7, stats.DailyClicks.Count);
-        Assert.All(stats.DailyClicks, d => Assert.Equal(0, d.Clicks));
+        Assert.Equal(0, stats.ClicksInRange);
+        Assert.Equal(fixture.Time.GetUtcNow().AddDays(-30), stats.From);
+        Assert.Equal(31, stats.Daily.Count);
     }
 
-    [Theory]
-    [InlineData(0)]
-    [InlineData(91)]
-    public async Task Statistics_reject_out_of_range_windows(int days)
+    [Fact]
+    public async Task Statistics_reject_an_inverted_range()
     {
         var fixture = new ServiceFixture();
+        var code = (await fixture.Service.CreateAsync(new CreateShortLinkCommand("https://example.com"))).Value.Link.Code;
+        var now = fixture.Time.GetUtcNow();
 
-        var result = await fixture.Service.GetStatisticsAsync("whatever", days);
+        var result = await fixture.Service.GetStatisticsAsync(code, now, now.AddDays(-1));
 
-        Assert.Equal("stats.window_invalid", result.Error!.Code);
+        Assert.Equal("range_inverted", result.Error!.Code);
+        Assert.Equal(ErrorType.Validation, result.Error.Type);
+    }
+
+    [Fact]
+    public async Task Statistics_reject_a_range_wider_than_the_maximum()
+    {
+        var fixture = new ServiceFixture();
+        var code = (await fixture.Service.CreateAsync(new CreateShortLinkCommand("https://example.com"))).Value.Link.Code;
+        var now = fixture.Time.GetUtcNow();
+
+        var result = await fixture.Service.GetStatisticsAsync(code, now.AddDays(-367), now);
+
+        Assert.Equal("range_too_wide", result.Error!.Code);
     }
 
     [Fact]
@@ -64,7 +82,7 @@ public class ShortLinkServiceQueryTests
     {
         var fixture = new ServiceFixture();
 
-        var result = await fixture.Service.GetStatisticsAsync("missing", 7);
+        var result = await fixture.Service.GetStatisticsAsync("missing", null, null);
 
         Assert.Equal(ErrorType.NotFound, result.Error!.Type);
     }
@@ -82,7 +100,21 @@ public class ShortLinkServiceQueryTests
         var page = (await fixture.Service.ListAsync(2, 2)).Value;
 
         Assert.Equal(5, page.TotalCount);
+        Assert.Equal(3, page.TotalPages);
+        Assert.True(page.HasNextPage);
         Assert.Equal(["https://example.com/3", "https://example.com/2"], page.Items.Select(l => l.OriginalUrl));
+    }
+
+    [Fact]
+    public async Task List_uses_the_configured_default_page_size()
+    {
+        var fixture = new ServiceFixture();
+
+        var page = (await fixture.Service.ListAsync(null, null)).Value;
+
+        Assert.Equal(1, page.Page);
+        Assert.Equal(fixture.Options.DefaultPageSize, page.PageSize);
+        Assert.False(page.HasNextPage);
     }
 
     [Theory]
@@ -95,7 +127,7 @@ public class ShortLinkServiceQueryTests
 
         var result = await fixture.Service.ListAsync(page, pageSize);
 
-        Assert.Equal("paging.invalid", result.Error!.Code);
+        Assert.Equal("paging_invalid", result.Error!.Code);
     }
 
     [Fact]
